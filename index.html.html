@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Or Visium — Dashboard do Cliente (MVP v2 • Supabase-ready)</title>
+  <!-- 
+    MVP INTERATIVO com autenticação, upload e aprovação de criativos
+    ✅ Pronto p/ conectar no SUPABASE (Auth + DB + Storage). 
+    ➜ Preencha SUPABASE_URL e SUPABASE_ANON_KEY abaixo para funcionar em produção.
+
+    Esquema sugerido (cole no Supabase SQL editor):
+
+    -- Tabelas básicas
+    create table if not exists public.clients (
+      id uuid primary key default gen_random_uuid(),
+      name text not null,
+      created_at timestamp with time zone default now()
+    );
+
+    create table if not exists public.profiles (
+      id uuid primary key references auth.users(id) on delete cascade,
+      role text check (role in ('admin','client')) not null default 'client',
+      client_id uuid references public.clients(id) on delete set null,
+      created_at timestamp with time zone default now()
+    );
+
+    create table if not exists public.creatives (
+      id uuid primary key default gen_random_uuid(),
+      client_id uuid references public.clients(id) on delete cascade,
+      title text not null,
+      notes text,
+      file_url text,          -- storage path/URL
+      status text not null default 'pendente', -- pendente|aprovado|reprovado
+      created_by uuid references auth.users(id) on delete set null,
+      created_at timestamp with time zone default now()
+    );
+
+    create table if not exists public.comments (
+      id uuid primary key default gen_random_uuid(),
+      creative_id uuid references public.creatives(id) on delete cascade,
+      author_id uuid references auth.users(id) on delete set null,
+      body text not null,
+      created_at timestamp with time zone default now()
+    );
+
+    -- RLS (Row Level Security)
+    alter table public.clients enable row level security;
+    alter table public.profiles enable row level security;
+    alter table public.creatives enable row level security;
+    alter table public.comments enable row level security;
+
+    -- Policies (simples):
+    -- Admin vê tudo; cliente vê apenas seu client_id
+    create policy if not exists clients_admin_all on public.clients for all using (
+      exists(select 1 from public.profiles p where p.id = auth.uid() and p.role='admin')
+    );
+    create policy if not exists clients_client_select on public.clients for select using (
+      id = (select client_id from public.profiles where id = auth.uid())
+    );
+
+    create policy if not exists profiles_self on public.profiles
+      for select using (id = auth.uid());
+
+    create policy if not exists creatives_admin_all on public.creatives for all using (
+      exists(select 1 from public.profiles p where p.id = auth.uid() and p.role='admin')
+    );
+    create policy if not exists creatives_client_rw on public.creatives for select using (
+      client_id = (select client_id from public.profiles where id = auth.uid())
+    );
+    create policy if not exists creatives_client_insert on public.creatives for insert with check (
+      client_id = (select client_id from public.profiles where id = auth.uid())
+    );
+    create policy if not exists creatives_client_update on public.creatives for update using (
+      client_id = (select client_id from public.profiles where id = auth.uid())
+    );
+
+    create policy if not exists comments_admin_all on public.comments for all using (
+      exists(select 1 from public.profiles p where p.id = auth.uid() and p.role='admin')
+    );
+    create policy if not exists comments_client_rw on public.comments for select using (
+      creative_id in (select id from public.creatives where client_id = (select client_id from public.profiles where id = auth.uid()))
+    );
+    create policy if not exists comments_client_insert on public.comments for insert with check (
+      creative_id in (select id from public.creatives where client_id = (select client_id from public.profiles where id = auth.uid()))
+    );
+
+    -- Storage bucket (no Supabase Storage): create bucket 'assets' (public=false).
+    -- Configure policy: quem está autenticado pode upload/ler objetos do seu client_id (pode usar policy com path: assets/{client_id}/...)
+  -->
+  <style>
+    :root{
+      --brand:#2f6f7a; --brand-2:#184c54; --bg:#0f1417; --panel:#121a1e; --muted:#748089; --text:#eef2f4; --border:#213038;
+      --ok:#31c48d; --warn:#f59e0b; --danger:#ef4444; --radius:16px; --shadow:0 10px 30px rgba(0,0,0,.35); --glow:0 0 0 1px rgba(47,111,122,.28), 0 6px 20px rgba(47,111,122,.18);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto; background: radial-gradient(1200px 1200px at 10% -10%, rgba(47,111,122,.15), transparent), var(--bg); color:var(--text)}
+    .layout{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
+    .sidebar{background:linear-gradient(180deg, var(--brand-2), #0d252a 60%, #0b1a1e); border-right:1px solid var(--border); padding:20px; position:sticky; top:0; height:100vh; overflow:auto}
+    .logo{display:flex;gap:10px;align-items:center;margin-bottom:24px}
+    .logo-badge{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--brand),#3e9aa9);display:grid;place-items:center;box-shadow:var(--glow)}
+    .nav{display:flex;flex-direction:column;gap:6px}
+    .nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;text-decoration:none;color:#dbe5e9;border:1px solid transparent}
+    .nav a:hover{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.06)}
+    .nav a.active{background:linear-gradient(135deg, rgba(47,111,122,.22), rgba(47,111,122,.07)); border-color:rgba(47,111,122,.33)}
+    .main{padding:22px 26px}
+    .topbar{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap}
+    .chip{background:var(--panel);border:1px solid var(--border);padding:8px 10px;border-radius:12px}
+    select,input,button,textarea{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:10px 12px}
+    button.btn{background:linear-gradient(180deg, var(--brand), #24555e);box-shadow:var(--glow);cursor:pointer}
+    .grid{display:grid;gap:14px}
+    .grid.kpis{grid-template-columns:repeat(4,1fr)}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,.02), transparent); border:1px solid var(--border); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow)}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:12px 10px;border-bottom:1px solid var(--border);text-align:left}
+    th{font-size:12px;color:#b7c8ce;text-transform:uppercase;letter-spacing:.12em}
+    .status{padding:4px 8px;border-radius:999px;font-size:12px;border:1px solid var(--border)}
+    .status.pendente{background:rgba(245,158,11,.12);color:#ffdd9a}
+    .status.aprovado{background:rgba(49,196,141,.12);color:#9be5c9}
+    .status.reprovado{background:rgba(239,68,68,.12);color:#ffb1b1}
+    .twocol{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    @media(max-width:1100px){.grid.kpis{grid-template-columns:repeat(2,1fr)} .layout{grid-template-columns:1fr} .sidebar{position:relative;height:auto} .twocol{grid-template-columns:1fr}}
+    .muted{color:var(--muted)}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.1/dist/umd/supabase.js"></script>
+</head>
+<body>
+<div id="app">
+  <!-- Tela de Login -->
+  <section id="auth" class="card" style="max-width:520px;margin:40px auto;display:none">
+    <h2 style="margin:0 0 8px">Entrar no painel</h2>
+    <p class="muted" style="margin:0 0 14px">Use seu e-mail para receber um link mágico.</p>
+    <form id="authForm" style="display:flex; gap:10px; flex-wrap:wrap">
+      <input id="email" type="email" required placeholder="seuemail@empresa.com" style="flex:1 1 260px" />
+      <button class="btn" type="submit">Enviar link</button>
+    </form>
+    <div id="authMsg" class="muted" style="margin-top:10px"></div>
+  </section>
+
+  <!-- App -->
+  <div class="layout" id="layout" style="display:none">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo-badge" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 12a8 8 0 1 1 16 0l-3.2-1.8L12 18l-4.8-7.8L4 12Z" stroke="white" stroke-width="1.4" opacity=".9"/></svg>
+        </div>
+        <div>
+          <div style="font-weight:800;letter-spacing:.08em">OR VISIUM</div>
+          <div class="muted" style="font-size:12px">Painel do Cliente</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="#overview" data-route class="active">Visão Geral</a>
+        <a href="#creatives" data-route>Criativos</a>
+        <a href="#uploads" data-route>Uploads</a>
+        <a href="#tasks" data-route>Tarefas</a>
+        <a href="#settings" data-route>Configurações</a>
+      </nav>
+      <div style="margin-top:16px">
+        <div class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:.12em; margin-bottom:6px">Conta</div>
+        <div id="whoami" class="muted" style="font-size:13px"></div>
+        <button id="logout" class="btn" style="margin-top:10px">Sair</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- TOPBAR -->
+      <div class="topbar">
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+          <select id="clientSelect" class="chip" title="Selecionar cliente"></select>
+          <input id="search" type="search" placeholder="Pesquisar…" />
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <span class="muted" id="roleTag"></span>
+        </div>
+      </div>
+
+      <!-- ROUTES -->
+      <section id="route-overview">
+        <div class="grid kpis" id="kpis"></div>
+        <div class="twocol" style="margin-top:14px">
+          <div class="card">
+            <h3 style="margin:0 0 8px">Campanhas / Criativos recentes</h3>
+            <table>
+              <thead><tr><th>Título</th><th>Status</th><th>Cliente</th><th>Criado em</th></tr></thead>
+              <tbody id="recentBody"></tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h3 style="margin:0 0 8px">Notas rápidas</h3>
+            <textarea id="notes" placeholder="Notas do cliente…" style="width:100%;height:180px"></textarea>
+            <div class="muted" style="font-size:12px;margin-top:6px">As notas ficam salvas por usuário no navegador.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="route-creatives" style="display:none">
+        <div class="card" style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+            <h3 style="margin:0">Criativos</h3>
+            <button id="newCreativeBtn" class="btn">Novo Criativo</button>
+          </div>
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr><th>Título</th><th>Status</th><th>Arquivo</th><th>Ações</th></tr></thead>
+            <tbody id="creativeBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="route-uploads" style="display:none">
+        <div class="card">
+          <h3 style="margin:0 0 8px">Enviar arquivo para a equipe</h3>
+          <form id="uploadForm" style="display:flex;gap:10px;flex-wrap:wrap">
+            <input type="file" id="uploadFile" required />
+            <input type="text" id="uploadTitle" placeholder="Título / descrição" />
+            <button class="btn" type="submit">Enviar</button>
+          </form>
+          <div class="muted" style="margin-top:8px">Arquivos enviados aparecem como "Criativos" pendentes (status: pendente) para aprovação.</div>
+        </div>
+      </section>
+
+      <section id="route-tasks" style="display:none">
+        <div class="card">
+          <h3 style="margin:0 0 8px">Tarefas (em breve)</h3>
+          <p class="muted">Módulo de tarefas/fluxo de aprovação por etapa (backlog → produção → revisão → publicado).</p>
+        </div>
+      </section>
+
+      <section id="route-settings" style="display:none">
+        <div class="card">
+          <h3 style="margin:0 0 8px">Configurações</h3>
+          <p class="muted">Definições de conta e preferências do cliente. Admin pode criar clientes e vincular usuários.</p>
+          <div id="adminPanel" style="display:none; margin-top:10px">
+            <h4>Criar novo cliente</h4>
+            <form id="newClientForm" style="display:flex;gap:10px;flex-wrap:wrap">
+              <input id="newClientName" placeholder="Nome do cliente" required />
+              <button class="btn" type="submit">Criar</button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+// ========== CONFIGURE AQUI SEU SUPABASE ==========
+const SUPABASE_URL = 'https://bjypvilaicqtufjnubxp.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqeXB2aWxhaWNxdHVmam51YnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY4Mzk0NTIsImV4cCI6MjA3MjQxNTQ1Mn0.RqS1LIcrqgkP3nYcULRgw-j_yk8C8v8v9GpIVRQZRWc';
+const supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// (Opcional) defina e-mails que serão admin por padrão (até vincular perfis):
+const ADMIN_EMAILS = ['orvisiumdigital@gmail.com'];
+
+// ===== Helpers UI =====
+const $ = s => document.querySelector(s);
+const routes = ['overview','creatives','uploads','tasks','settings'];
+function show(id){ routes.forEach(r=> $('#route-'+r).style.display = (r===id?'block':'none')); }
+function setActive(link){ document.querySelectorAll('[data-route]').forEach(a=>a.classList.remove('active')); link.classList.add('active'); }
+function fmtDate(x){ return new Date(x).toLocaleString('pt-BR'); }
+function toast(msg){ const d=document.createElement('div'); d.textContent=msg; d.style.cssText='position:fixed;bottom:16px;right:16px;background:#0b1a1e;border:1px solid #213038;padding:10px 14px;border-radius:10px;z-index:9999'; document.body.appendChild(d); setTimeout(()=>d.remove(),2400); }
+
+// ===== Estado =====
+let session = null; // supabase session
+let profile = null; // {role, client_id}
+let clients = [];
+
+async function init(){
+  const {data:{session:ses}} = await supa.auth.getSession();
+  session = ses; if(!session){ $('#auth').style.display='block'; return; }
+  $('#layout').style.display='grid';
+  await loadProfile();
+  await loadClients();
+  wireNav();
+  renderWhoAmI();
+  await refreshAll();
+}
+
+// ===== Auth =====
+$('#authForm').addEventListener('submit', async (e)=>{
+  e.preventDefault(); const email=$('#email').value.trim();
+  const {error} = await supa.auth.signInWithOtp({ email, options:{ emailRedirectTo: window.location.href } });
+  $('#authMsg').textContent = error ? ('Erro: '+error.message) : 'Enviamos um link para seu e-mail.';
+});
+
+$('#logout').addEventListener('click', async()=>{ await supa.auth.signOut(); window.location.reload(); });
+
+supa.auth.onAuthStateChange((_event, ses)=>{ if(ses){ session=ses; $('#auth').style.display='none'; $('#layout').style.display='grid'; init(); } });
+
+async function loadProfile(){
+  // tenta buscar profile; se não existir, cria padrão (cliente ou admin por e-mail)
+  const uid = session.user.id;
+  let {data:rows, error} = await supa.from('profiles').select('*').eq('id', uid).maybeSingle();
+  if(error){ console.warn(error); }
+  if(!rows){
+    const role = ADMIN_EMAILS.includes(session.user.email) ? 'admin' : 'client';
+    const { data: inserted } = await supa.from('profiles').insert([{ id: uid, role }]).select().single();
+    profile = inserted;
+  } else { profile = rows; }
+  $('#roleTag').textContent = `Perfil: ${profile.role}`;
+}
+
+async function loadClients(){
+  if(profile.role==='admin'){
+    const {data, error} = await supa.from('clients').select('*').order('name');
+    clients = data||[];
+  } else {
+    // cliente vê só o próprio
+    const {data: c} = await supa.from('clients').select('*').eq('id', profile.client_id).limit(1);
+    clients = c||[];
+  }
+  const sel = $('#clientSelect');
+  sel.innerHTML = clients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+}
+
+function renderWhoAmI(){
+  $('#whoami').innerHTML = `${session.user.email}<br><span class="muted">${session.user.id.slice(0,8)}…</span>`;
+}
+
+// ===== Navegação =====
+function wireNav(){
+  document.querySelectorAll('[data-route]').forEach(a=>{
+    a.addEventListener('click', e=>{
+      e.preventDefault(); const id=a.getAttribute('href').replace('#',''); show(id); setActive(a);
+    });
+  });
+}
+
+// ===== Dados / Render =====
+async function refreshAll(){
+  await renderKPIs();
+  await renderRecent();
+  await renderCreatives();
+}
+
+async function renderKPIs(){
+  // KPIs básicos: totais por status para o cliente selecionado
+  const client_id = $('#clientSelect').value || (clients[0] && clients[0].id);
+  if(!client_id){ $('#kpis').innerHTML = '<div class="card">Sem cliente vinculado.</div>'; return; }
+  const {data: stats} = await supa.rpc('kpis_for_client', { p_client: client_id }).catch(()=>({data:null}));
+  // Se não tiver RPC criada, calcula simples via contagem:
+  let leadCount=0, pendentes=0, aprovados=0, reprovados=0;
+  const {data:all} = await supa.from('creatives').select('status').eq('client_id', client_id);
+  (all||[]).forEach(r=>{ if(r.status==='pendente') pendentes++; if(r.status==='aprovado') aprovados++; if(r.status==='reprovado') reprovados++; });
+  const wrap = $('#kpis');
+  const kpi = (label,val)=>`<div class="card"><div style="font-size:12px;color:#b7c8ce;text-transform:uppercase;letter-spacing:.12em">${label}</div><div style="font-size:22px;font-weight:800;margin-top:6px">${val}</div></div>`;
+  wrap.innerHTML = [
+    kpi('Pendentes', pendentes),
+    kpi('Aprovados', aprovados),
+    kpi('Reprovados', reprovados),
+    kpi('Total de itens', (all||[]).length)
+  ].join('');
+}
+
+async function renderRecent(){
+  const client_id = $('#clientSelect').value || (clients[0] && clients[0].id);
+  const {data} = await supa.from('creatives').select('id,title,status,client_id,created_at,clients(name)').eq('client_id', client_id).order('created_at',{ascending:false}).limit(10);
+  $('#recentBody').innerHTML = (data||[]).map(r=>`<tr><td>${r.title}</td><td><span class="status ${r.status}">${r.status}</span></td><td>${r.clients?.name||'-'}</td><td>${fmtDate(r.created_at)}</td></tr>`).join('');
+}
+
+async function renderCreatives(){
+  const client_id = $('#clientSelect').value || (clients[0] && clients[0].id);
+  const {data} = await supa.from('creatives').select('*').eq('client_id', client_id).order('created_at',{ascending:false});
+  $('#creativeBody').innerHTML = (data||[]).map(r=>{
+    const open = `<button class="btn" data-open="${r.id}">Abrir</button>`;
+    const approve = `<button class="btn" data-approve="${r.id}">Aprovar</button>`;
+    const reject = `<button class="btn" data-reject="${r.id}">Reprovar</button>`;
+    const link = r.file_url ? `<a href="${r.file_url}" target="_blank">ver arquivo</a>` : '-';
+    return `<tr><td>${r.title||'-'}</td><td><span class="status ${r.status}">${r.status}</span></td><td>${link}</td><td style="display:flex;gap:8px;flex-wrap:wrap">${open}${approve}${reject}</td></tr>`
+  }).join('');
+
+  // ações
+  document.querySelectorAll('[data-approve]').forEach(b=>b.addEventListener('click',()=>updateStatus(b.dataset.approve,'aprovado')));
+  document.querySelectorAll('[data-reject]').forEach(b=>b.addEventListener('click',()=>updateStatus(b.dataset.reject,'reprovado')));
+  document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>openCreative(b.dataset.open)));
+}
+
+async function updateStatus(id, status){
+  const {error} = await supa.from('creatives').update({status}).eq('id', id);
+  if(error){ toast('Erro: '+error.message); return; }
+  toast('Status atualizado para '+status);
+  await refreshAll();
+}
+
+async function openCreative(id){
+  // modal simples com comentários
+  const {data} = await supa.from('creatives').select('*').eq('id', id).single();
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:grid;place-items:center;z-index:10000';
+  modal.innerHTML = `
+    <div class="card" style="max-width:720px;width:95vw;max-height:86vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <h3 style="margin:0">${data.title}</h3>
+        <button class="btn" id="closeModal">Fechar</button>
+      </div>
+      <div class="muted" style="margin:8px 0">Status: <span class="status ${data.status}">${data.status}</span></div>
+      ${data.file_url ? `<div style="margin:10px 0"><a class="btn" href="${data.file_url}" target="_blank">Abrir arquivo</a></div>`:''}
+      <div style="margin-top:12px">
+        <h4>Comentários</h4>
+        <div id="commentsWrap" class="card" style="max-height:260px;overflow:auto"></div>
+        <form id="commentForm" style="display:flex;gap:10px;margin-top:8px">
+          <input id="commentBody" placeholder="Escreva um comentário" style="flex:1"/>
+          <button class="btn" type="submit">Enviar</button>
+        </form>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  $('#closeModal').addEventListener('click',()=>modal.remove());
+
+  async function loadComments(){
+    const {data:c} = await supa.from('comments').select('*, profiles(role)').eq('creative_id', id).order('created_at',{ascending:true});
+    $('#commentsWrap').innerHTML = (c||[]).map(x=>`<div style="border-bottom:1px solid var(--border);padding:8px 0"><div style="font-size:12px" class="muted">${fmtDate(x.created_at)}</div><div>${x.body}</div></div>`).join('') || '<div class="muted">Sem comentários.</div>';
+  }
+  await loadComments();
+
+  $('#commentForm').addEventListener('submit', async (e)=>{
+    e.preventDefault(); const body = $('#commentBody').value.trim(); if(!body) return;
+    const {error} = await supa.from('comments').insert([{ creative_id:id, author_id: session.user.id, body }]);
+    if(error){ toast('Erro: '+error.message); return; }
+    $('#commentBody').value=''; await loadComments();
+  });
+}
+
+// ===== Criar criativo / Upload =====
+$('#newCreativeBtn')?.addEventListener('click', async()=>{
+  const title = prompt('Título do criativo:'); if(!title) return;
+  const client_id = $('#clientSelect').value || (clients[0] && clients[0].id);
+  const {error} = await supa.from('creatives').insert([{ title, client_id, created_by: session.user.id }]);
+  if(error){ toast('Erro: '+error.message); return; }
+  toast('Criativo criado.'); await refreshAll(); show('creatives');
+});
+
+$('#uploadForm')?.addEventListener('submit', async(e)=>{
+  e.preventDefault();
+  const file = $('#uploadFile').files[0]; if(!file){ toast('Selecione um arquivo.'); return; }
+  const title = $('#uploadTitle').value || file.name;
+  const client_id = $('#clientSelect').value || (clients[0] && clients[0].id);
+  const path = `${client_id}/${Date.now()}_${file.name}`;
+  const {error:upErr} = await supa.storage.from('assets').upload(path, file, { upsert:false });
+  if(upErr){ toast('Upload falhou: '+upErr.message); return; }
+  const { data: { publicUrl } } = supa.storage.from('assets').getPublicUrl(path);
+  const {error:insErr} = await supa.from('creatives').insert([{ title, client_id, created_by: session.user.id, status:'pendente', file_url: publicUrl }]);
+  if(insErr){ toast('Erro salvando registro: '+insErr.message); return; }
+  $('#uploadForm').reset(); toast('Arquivo enviado!'); await refreshAll(); show('creatives');
+});
+
+// ===== Notas locais =====
+$('#notes')?.addEventListener('input',()=>{ localStorage.setItem('orv:notes:'+session.user.id, $('#notes').value); });
+
+// ===== Admin: criar cliente =====
+$('#newClientForm')?.addEventListener('submit', async(e)=>{
+  e.preventDefault(); const name=$('#newClientName').value.trim(); if(!name) return;
+  const {error} = await supa.from('clients').insert([{name}]);
+  if(error){ toast('Erro: '+error.message); return; }
+  $('#newClientName').value=''; toast('Cliente criado!'); await loadClients();
+});
+
+// ===== Inicialização =====
+window.addEventListener('DOMContentLoaded', async()=>{
+  // esconde/mostra painel admin conforme perfil
+  const obs = new MutationObserver(()=>{
+    if(profile?.role==='admin'){ $('#adminPanel').style.display='block'; }
+    if(session){ $('#notes').value = localStorage.getItem('orv:notes:'+session.user.id) || ''; }
+  });
+  obs.observe(document.body, {subtree:true, childList:true});
+  // rotas
+  document.querySelectorAll('[data-route]').forEach(a=>a.addEventListener('click',()=>{
+    const id = a.getAttribute('href').replace('#',''); show(id);
+  }));
+  show('overview');
+  await init();
+});
+</script>
+</body>
+</html>
